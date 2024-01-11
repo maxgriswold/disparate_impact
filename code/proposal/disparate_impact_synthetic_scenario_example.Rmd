@@ -1,0 +1,184 @@
+---
+title: "Simulate disparate impact stats"
+author: "Max Griswold"
+date: "2024-01-11"
+output: html_document
+---
+
+# Simulate how disparate impact statistics can fail
+# Max Griswold
+# 1/9/24
+
+```{r knitr_options include = F}
+rm(list = ls())
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, error = FALSE)
+
+library(dagitty)
+library(ggdag)
+library(ggplot2)
+
+```
+
+Disparate impact cases require demonstrating if a disparity in outcomes for a protected class is statistically significant and sufficiently sized. This project aims to use simulation to show a range of cases where the conventional statistical rules for determining a disparate impact -the four-fifths rule and significance rule - can lead to different conclusions due 
+
+This notebook demonstrates a simplified example of how we might conduct these simulations. The setup is that a landlord is determining whether to accept a tenant's rental application, based on their income and former-incarceration status. In each of the three scenarios below, the landlord aims to deny candidacy to applicants based on their race. I assume that an applicant's race is correlated both with income and with the probability of being formerly-incarcerated. In each example below, the landlord's decision-making on an applicant's status conforms to following data generating process:
+
+```{r, echo = F}
+# Creating a wrapper for plotting options, in case I reuse this:
+plot_dag <- function(dag){
+    ggplot(dag, aes(x = x, y = y, xend = xend, yend = yend)) +
+      geom_dag_node(color = "white") +
+      geom_dag_text(color = "#252525", size = 8) +
+      geom_dag_edges(edge_colour = "#252525", edge_width = 1) +
+      theme_dag(base_family = "serif")
+}
+
+# Set up diagram
+dgp <- dagify(D ~ I, 
+             D ~ R,
+             D ~ J,
+             I ~ R,
+             J ~ R,
+             I ~ J,
+             coords = list(x = c(D = 4, I = 5, J = 3, R = 1), 
+                           y = c(D = 0, I = 1, J = 1, R = 0)))
+
+dgp <- tidy_dagitty(dgp)
+plot_dag(dgp)
+```
+
+In the first example, the landlord engages in direct discrimination: If the tenant is black, they offer a unit to them 25% less often than a comparable white candidate. In the second example, the landlord attempts to obscure their motive by only applying their preferences for a fraction of tenants. However, for this fraction, they are far less likely to offer a unit. For this scenario, 
+
+```{r functions, echo = F}
+
+relative_risk <- function(r1, r2){
+    
+    # Calculate numerator and denominator
+    # for the RR:
+    r1 <- sum(r1)/length(r1)
+    r2 <- sum(r2)/length(r2)
+    
+    # Calculate relative risk:
+    rr <- r1/r2
+    return(rr)
+    
+}
+
+inv_logit <- function(v){
+  return(exp(v)/(1 + exp(v)))
+}
+
+sim_scenarios <- function(n, i){
+  
+  # Create population by race/ethnicity
+  race <- rbinom(n = n, 1, prob = 0.14)
+
+  # Set up Jail probability. Note this is only determined by race in the DAG, with
+  # some added noise to ensure these variables aren't perfectly correlated. I used
+  # https://bjs.ojp.gov/content/pub/pdf/Llgsfp.pdf to set up base probabilities
+  
+  prob_jail <- 0.04 + race*0.241 + runif(n, -0.03, 0.03)
+  jail <- rbinom(n = n, 1, prob = prob_jail)
+  
+  # Set used monthly earning amounts based on distribution of
+  # usa income + modifiers based on race/incarceration status from:
+  # https://scholar.harvard.edu/files/brucewestern/files/racial_inequality_in_employment_and_earnings_after_incarceration.pdf
+  
+  earn <- rgamma(n, 2, 3)*1000
+  earn <- earn*(1 - (0.2*jail + 0.35*race))
+  
+  # Set up scenarios to determine probability of offering an apartment to the
+  # applicant. Start with baseline probabilities for the first two cases for
+  # income and incarceration status:
+  dp_jail   <- 1 - 0.5*jail
+  
+  # Rescaling income between 0 and 1 works out to be a 
+  # reasonable probability
+  dp_income <- (log(earn) - min(log(earn)))/(max(log(earn)) - min(log(earn)))
+  
+  # Scenario 1: For black applicants, offer the apartment 25% less often
+  dp1 <- (1 - 0.25*race)*dp_income*dp_jail
+  d1 <- rbinom(n, 1, dp1)
+  
+  # Scenario 2: For 1/3rd of random black applicants, offer the apartment
+  # 75% less often
+  bad_luck <- rbinom(n, 1, prob = ifelse(race == 1, 0.3, 0))
+  dp2 <- (1 - 0.75*bad_luck)*dp_income*dp_jail
+  d2  <- rbinom(n, 1, dp2)
+  
+  # In final scenario, increase probabilities for former incarceration
+  # rejections so that a similar number of black applicants are denied
+  # housing as scenario 1 and 2.
+  dp_jail_alt <- 1 - 0.8*jail  
+  dp3 <- dp_income*dp_jail_alt
+  d3  <- rbinom(n, 1, dp3)
+  
+  df_sim <- data.table('race' = race,
+                        'earn' = earn,
+                        'jail' = jail,
+                        'luck' = bad_luck,
+                        'p1' = dp1,
+                        'p2' = dp2,
+                        'p3' = dp3,
+                        'd1' = d1,
+                        'd2' = d2,
+                        'd3' = d3,
+                        "iter" = i,
+                        "n" = n)
+  
+  # Hardcoding this to move quickly; I should be using a for loop for this step  
+  # (and in a few previous steps too):
+  df_sim[, rr1 := relative_risk(df_sim[race == 0,]$d1, df_sim[race == 1,]$d1)]
+  df_sim[, rr2 := relative_risk(df_sim[race == 0,]$d2, df_sim[race == 1,]$d2)]
+  df_sim[, rr3 := relative_risk(df_sim[race == 0,]$d3, df_sim[race == 1,]$d3)]
+  
+  # Use logit models to estimate effect of race on applicant acceptance:
+  mod1 <- glm(d1 ~ race + earn + jail, data = df_sim, family = 'binomial')
+  mod2 <- glm(d2 ~ race + earn + jail, data = df_sim, family = 'binomial')
+  mod3 <- glm(d3 ~ race + earn + jail, data = df_sim, family = 'binomial')
+  
+  res <- list(mod1, mod2, mod3)
+  
+  # Extract estimate of race and associated p-value. Convert estimate to
+  # a probability:
+  for (i in 1:3){
+    est_name  <- paste0("est", i)
+    pval_name <- paste0("pval", i)
+    
+    df_sim[, (est_name)  := inv_logit(coef(res[[i]])[['race']])]
+    df_sim[, (pval_name) := summary(res[[i]])$coefficients['race','Pr(>|z|)']]
+    
+  }
+  
+  return(df_sim)
+  
+}
+
+```
+
+```{r model_runs, echo = F}
+
+n <- seq(100, 2500, 100)
+i <- 1000
+
+# Run each scenario 100 times, for each sample size
+args <- expand.grid("n" = n, "i" = i)
+
+df <- rbindlist(mapply(sim_scenarios, n = args$n, i = args$i, SIMPLIFY = F, USE.NAMES = F))
+
+```
+
+```{r plots}
+
+df_plot <- unique(df[, .(iter, n, est1, est2, est3, pval1, pval2, pval3, rr1, rr2, rr3)])
+df_plot <- melt(df_plot, id.vars = c("iter", "n"), measure = patterns("^est", "^pval", "^rr"),
+                value.name = c("est", "pval", "rr"), variable.name = "scenario")
+
+# Calculate mean values across iterations:
+df_plot[, `:=`(est = mean(est), pval = mean(pval), rr = mean(rr)), by = c("scenario", "n")]
+
+ggplot(df_plot, aes(x = n, y = pval, color = as.factor(scenario))) +
+  geom_line(size = 1) +
+  theme_bw()
+```
