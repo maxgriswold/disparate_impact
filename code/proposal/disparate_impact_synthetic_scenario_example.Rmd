@@ -2,14 +2,18 @@
 title: "Simulate disparate impact stats"
 author: "Max Griswold"
 date: "2024-01-11"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 # Simulate how disparate impact statistics can fail
+
 # Max Griswold
+
 # 1/9/24
 
-```{r knitr_options include = F}
+```{r knitr_options, include = F}
 rm(list = ls())
 
 knitr::opts_chunk$set(warning = FALSE, message = FALSE, error = FALSE)
@@ -18,11 +22,17 @@ library(dagitty)
 library(ggdag)
 library(ggplot2)
 
+library(data.table)
+
 ```
 
-Disparate impact cases require demonstrating if a disparity in outcomes for a protected class is statistically significant and sufficiently sized. This project aims to use simulation to show a range of cases where the conventional statistical rules for determining a disparate impact -the four-fifths rule and significance rule - can lead to different conclusions due 
+Disparate impact cases require demonstrating if a disparity in outcomes for a protected class is statistically significant and sufficiently sized. This project aims to use simulation to show a range of cases where the conventional statistical rules for determining a disparate impact -the four-fifths rule and significance rule - can lead to different conclusions due
 
-This notebook demonstrates a simplified example of how we might conduct these simulations. The setup is that a landlord is determining whether to accept a tenant's rental application, based on their income and former-incarceration status. In each of the three scenarios below, the landlord aims to deny candidacy to applicants based on their race. I assume that an applicant's race is correlated both with income and with the probability of being formerly-incarcerated. In each example below, the landlord's decision-making on an applicant's status conforms to following data generating process:
+This notebook demonstrates a simplified example of how we might conduct simulations. The setup concerns a landlord determining whether to accept a tenant's rental application, based on their income and former-incarceration status. In each of the three scenarios below, the landlord aims to deny tenancy to applicants based on their race.
+
+To start, I generate data according to the following data generating process (figure 1). I assume that an applicant's race is correlated both with their monthly earnings and with the probability of being formerly-incarcerated. I also assume monthly earnings also depend on former incarceration status. I assume in each scenario that these three variables uniquely determine if a landlord
+
+I determined the probability of former incarceration status using data from [DOJ-OJP](https://bjs.ojp.gov/content/pub/pdf/Llgsfp.pdf), monthly earnings based off [Census income](https://www.census.gov/library/publications/2023/demo/p60-279.html), and the effect of incarceration status on monthly earnings, stratified by race, from estimates in [Western, 2017](https://scholar.harvard.edu/files/brucewestern/files/racial_inequality_in_employment_and_earnings_after_incarceration.pdf).
 
 ```{r, echo = F}
 # Creating a wrapper for plotting options, in case I reuse this:
@@ -31,45 +41,53 @@ plot_dag <- function(dag){
       geom_dag_node(color = "white") +
       geom_dag_text(color = "#252525", size = 8) +
       geom_dag_edges(edge_colour = "#252525", edge_width = 1) +
+      labs(title = "Figure 1: Synthetic Data Generating Process",
+           caption = "R = Race, J = Former-incarceration status, \nE = Monthly Earnings, A = Application status") +
       theme_dag(base_family = "serif")
 }
 
 # Set up diagram
-dgp <- dagify(D ~ I, 
-             D ~ R,
-             D ~ J,
-             I ~ R,
-             J ~ R,
-             I ~ J,
-             coords = list(x = c(D = 4, I = 5, J = 3, R = 1), 
-                           y = c(D = 0, I = 1, J = 1, R = 0)))
+dgp <- dagify(A ~ E, 
+             A ~ R,
+             A ~ F,
+             E ~ R,
+             F ~ R,
+             E ~ F,
+             coords = list(x = c(A = 4, E = 5, F = 3, R = 1), 
+                           y = c(A = 0, E = 1, F = 1, R = 0)))
 
 dgp <- tidy_dagitty(dgp)
 plot_dag(dgp)
 ```
 
-In the first example, the landlord engages in direct discrimination: If the tenant is black, they offer a unit to them 25% less often than a comparable white candidate. In the second example, the landlord attempts to obscure their motive by only applying their preferences for a fraction of tenants. However, for this fraction, they are far less likely to offer a unit. For this scenario, 
+I set up the following decision scenarios for the landlord:
+
+1.  The landlord engages in direct discrimination: If the applicant is black, they offer a unit to them 25% less often than a comparable white candidate.
+2.  The landlord attempts to obscure their motive by only denying tenancy to a fraction of applicants. Every third black applicant they encounter, they deny their tenancy 75% more often.
+3.  The landlord puts more weight on former-incarceration status to decide if they deny an applicant tenancy. They choose a probability of denying tenancy based on former-incarceration status so they deny tenancy to an equal proportion of black-to-white tenants as in the first two scenarios.
+
+Across all scenarios, the same ratio of black-to-white applicants are denied tenancy. I used monte-carlo simulation to generate 500 synthetic datasets and varied the sample size of applicants between 200 and 4000.
+
+For each simulation and scenario, I regressed a tenant's application status (accepted or denied) on the tenant's race, former-incarceration status, and monthly earnings using a binomial regression with a logit link. This is a routine model used to detect disparate impact ([Ayres, 2010](https://www.law.upenn.edu/live/files/1138-ayresincludedvariablebiaspdf); [Jung et al., 2023](https://5harad.com/papers/included-variable-bias.pdf))
+
+I then obtained the estimated p-value for the beta-coefficient on race and used the regression equation to calculate an estimate for the ratio of black-to-white applicants denied tenancy. Finally, I took the mean of these estimates across simulation iterations.
 
 ```{r functions, echo = F}
 
-relative_risk <- function(r1, r2){
-    
-    # Calculate numerator and denominator
-    # for the RR:
-    r1 <- sum(r1)/length(r1)
-    r2 <- sum(r2)/length(r2)
-    
-    # Calculate relative risk:
-    rr <- r1/r2
-    return(rr)
-    
+prob_ratio <- function(p1, p2){
+  
+  p1 <- sum(p1)/length(p1)
+  p2 <- sum(p2)/length(p2)
+  
+  return(p1/p2)
+  
 }
 
 inv_logit <- function(v){
-  return(exp(v)/(1 + exp(v)))
+    return(exp(v)/(1 + exp(v)))
 }
 
-sim_scenarios <- function(n, i){
+sim_scenarios <- function(n, iter, sum_res = T){
   
   # Create population by race/ethnicity
   race <- rbinom(n = n, 1, prob = 0.14)
@@ -107,10 +125,9 @@ sim_scenarios <- function(n, i){
   dp2 <- (1 - 0.75*bad_luck)*dp_income*dp_jail
   d2  <- rbinom(n, 1, dp2)
   
-  # In final scenario, increase probabilities for former incarceration
   # rejections so that a similar number of black applicants are denied
   # housing as scenario 1 and 2.
-  dp_jail_alt <- 1 - 0.8*jail  
+  dp_jail_alt <- 1 - 0.95*jail  
   dp3 <- dp_income*dp_jail_alt
   d3  <- rbinom(n, 1, dp3)
   
@@ -124,31 +141,42 @@ sim_scenarios <- function(n, i){
                         'd1' = d1,
                         'd2' = d2,
                         'd3' = d3,
-                        "iter" = i,
+                        "iter" = iter,
                         "n" = n)
   
   # Hardcoding this to move quickly; I should be using a for loop for this step  
   # (and in a few previous steps too):
-  df_sim[, rr1 := relative_risk(df_sim[race == 0,]$d1, df_sim[race == 1,]$d1)]
-  df_sim[, rr2 := relative_risk(df_sim[race == 0,]$d2, df_sim[race == 1,]$d2)]
-  df_sim[, rr3 := relative_risk(df_sim[race == 0,]$d3, df_sim[race == 1,]$d3)]
+  df_sim[, rr1 := prob_ratio(df_sim[race == 1,]$d1, df_sim[race == 0,]$d1)]
+  df_sim[, rr2 := prob_ratio(df_sim[race == 1,]$d2, df_sim[race == 0,]$d2)]
+  df_sim[, rr3 := prob_ratio(df_sim[race == 1,]$d3, df_sim[race == 0,]$d3)]
   
-  # Use logit models to estimate effect of race on applicant acceptance:
-  mod1 <- glm(d1 ~ race + earn + jail, data = df_sim, family = 'binomial')
-  mod2 <- glm(d2 ~ race + earn + jail, data = df_sim, family = 'binomial')
-  mod3 <- glm(d3 ~ race + earn + jail, data = df_sim, family = 'binomial')
+  # Using a poisson with a log link + robust standard errors so I can interpret the 
+  # coefficients as relative risks
+  mod1 <- glm(d1 ~ race + earn + jail, data = df_sim, family = binomial(link = logit))
+  mod2 <- glm(d2 ~ race + earn + jail, data = df_sim, family = binomial(link = logit))
+  mod3 <- glm(d3 ~ race + earn + jail, data = df_sim, family = binomial(link = logit))
   
   res <- list(mod1, mod2, mod3)
   
-  # Extract estimate of race and associated p-value. Convert estimate to
-  # a probability:
+  # Extract estimated probability of acceptance by race and associated p-value. 
   for (i in 1:3){
     est_name  <- paste0("est", i)
     pval_name <- paste0("pval", i)
     
-    df_sim[, (est_name)  := inv_logit(coef(res[[i]])[['race']])]
+    p1 <- predict(res[[i]], newdata = data.frame(race = 1, jail = 0, earn = 0), type = 'response')[[1]]
+    p2 <- predict(res[[i]], newdata = data.frame(race = 0, jail = 0, earn = 0), type = 'response')[[1]]
+    est_prob_ratio <- p1/p2
+    
+    df_sim[, (est_name)  := est_prob_ratio]
     df_sim[, (pval_name) := summary(res[[i]])$coefficients['race','Pr(>|z|)']]
     
+  }
+  
+  # Summarize results and return a reduced dataset
+  if (sum_res == T){
+    df_sim <- unique(df_sim[, .(iter, n, est1, est2, est3, pval1, pval2, pval3, rr1, rr2, rr3)])
+    df_sim <- melt(df_sim, id.vars = c("iter", "n"), measure = patterns("^est", "^pval", "^rr"),
+                value.name = c("est", "pval", "rr"), variable.name = "scenario")
   }
   
   return(df_sim)
@@ -159,26 +187,92 @@ sim_scenarios <- function(n, i){
 
 ```{r model_runs, echo = F}
 
-n <- seq(100, 2500, 100)
-i <- 1000
+n <- seq(200, 4000, 200)
+i <- 1:500
 
 # Run each scenario 100 times, for each sample size
 args <- expand.grid("n" = n, "i" = i)
 
 df <- rbindlist(mapply(sim_scenarios, n = args$n, i = args$i, SIMPLIFY = F, USE.NAMES = F))
 
+# Calculate mean values across iterations:
+df[, `:=`(est = mean(est), pval = mean(pval), rr = mean(rr)), by = c("scenario", "n")]
+df <- unique(df[, .(n, scenario, est, pval, rr)])
+
 ```
 
-```{r plots}
+To meet the standards for disparate impact, the protected class needs to be selected as an applicant less than 80\% of the time (the four-fifths rule) and this effect needs to be significant at the 0.05 significance level. Since we set up the scenarios, we know for a fact that landlords are discriminating against black applicants 25% more often than white applicants. However, can the models detect this effect?
 
-df_plot <- unique(df[, .(iter, n, est1, est2, est3, pval1, pval2, pval3, rr1, rr2, rr3)])
-df_plot <- melt(df_plot, id.vars = c("iter", "n"), measure = patterns("^est", "^pval", "^rr"),
-                value.name = c("est", "pval", "rr"), variable.name = "scenario")
+Figure 2 displays the estimated rate at which black applicants are selected for a unit compared to white applicants. For scenario 1 and 2, the model is able to detect a disparity of roughly 70\%. For scenario 3, the estimated disparity is close to 100\%. While scenario 1 and 2 are able to meet the four-fifths rule, all scenarios underestimate the true disparity. This can be seen by examining the data generating process. Since the models include controls, the effects of race in these models will not estimate the mediating effect of race on earnings and former-incarceration status. Accordingly, all estimates are unable to detect the true disparity observed in the outcome. Increasing sample size does not improve the ability of the models to detect the true disparity.
 
-# Calculate mean values across iterations:
-df_plot[, `:=`(est = mean(est), pval = mean(pval), rr = mean(rr)), by = c("scenario", "n")]
+```{r ratio plot, echo = F}
+plot_colors <- c("#bdbdbd", "#737373", "#252525")
 
-ggplot(df_plot, aes(x = n, y = pval, color = as.factor(scenario))) +
+# Demonstrate the estimated effect by scenario
+ggplot(df, aes(x = n, y = est, color = as.factor(scenario))) +
   geom_line(size = 1) +
-  theme_bw()
+  geom_line(data = df[, mean(rr), by = "n"], aes(x = n, y = V1), color = "#252525", alpha = 0.8, linetype = 21, size = 1) +
+  scale_color_manual(values = plot_colors) +
+  labs(x = "\nSample size",
+       y = "True \ndisparity ",
+       color = "Decision scenario",
+       title = "Figure 2: Estimated ratio of applicant selection") +
+  theme_bw() +
+  annotate('text', x = 500, y = 0.5, label = "Observed \ndisparity", size = 3) +
+  annotate('segment', x = 730, y = 0.53, xend = 1100, yend = 0.6, 
+           arrow = arrow(type = 'closed', length = unit(0.02, 'npc'))) +
+  scale_y_continuous(limits = c(0, 1.1), 
+                     breaks = seq(0, 1, 0.1)) +
+  scale_x_continuous(limits = c(200, 4000),
+                     breaks = c(200, 1000, 2000, 3000, 4000)) +
+  guides(color = guide_legend(nrow = 1, byrow = T, order = 1)) +
+      theme(legend.position = "bottom",
+            legend.direction = "vertical",
+            legend.box = "vertical",
+            legend.title.align = 0,
+            plot.title = element_text(hjust = 0),
+            axis.text = element_text(size = 10, family = 'serif'),
+            axis.title.y = element_text(angle = 0, vjust = 1),
+            legend.text = element_text(family = 'serif', size = 12))
+```
+
+Additionally, the estimating equations vary substantially in terms of detecting effects at a 0.05 significance level. Figure 3 below displays the average estimated p-value by scenario and sample sizes. Scenario 1 is identified by the model once there's a sample size of 1000 Scenario 2, which is more variable in how the the landlord makes a discriminatory decision, unsurprisingly requires a larger sample size to detect the effect, needing a minimum sample size of 1200. 
+
+However, in scenario 3, the model is unable to detect a significant effect at any sample size. This scenario is the canonical case where disparate impact tests would be most useful since the landlord's decision-making did not depend on race per se (i.e. no intent) but led to a disparate impact. This result should be unsurprising based on the data generating process above (since the model controls for both earnings and former incarceration status, there is no possibility for the race variable to generate an effect). 
+
+This result also aligns with existing scholarship which criticizes the use of examining the treatment effect of race as a measure of discrimination. (Kohler-Hausmann, 2019)[https://scholarlycommons.law.northwestern.edu/cgi/viewcontent.cgi?article=1374&context=nulr]; (Heckman, 1998)[https://www.aeaweb.org/articles?id=10.1257/jep.12.2.101]. Since the model controls for variables causally related to race, which is a routine practice done during disparate impact analyses, the model removes many of the factors causing discriminatory impacts due to race. Previous scholars have described this as the "included variable bias" ([Ayres, 2010](https://www.law.upenn.edu/live/files/1138-ayresincludedvariablebiaspdf); [Jung et al., 2023](https://5harad.com/papers/included-variable-bias.pdf)). In particular Jung et al., 2023 demonstrates that by weighting averages of differences across groups balanced by control covariates, it might be possible to identify the actual disparity. 
+
+However, as Figure 2 shows, this could introduce a new problem: smaller sample sizes, making it less likely to meet the statistical significance rule. Since the Jung approach requires stratifying differences and creating a unitary measure of risk, a larger sample size would be needed to identify disparities. One potential solution to this suggested by previous work, is that courts should  use probabilities of detecting an effect in place of statistical significance (Miao and Gastwirth, 2013)[https://academic.oup.com/lpr/article/12/1/37/925237#15990473].. But this would require determining study power, which might not be possible to due a lack of reliable previous studies and the limiations of determinig statistical power after collecting data (Dziak, Dierker, and Abar, 2020)[https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7286546/]. 
+
+Less discussed by previous literature is the idea that data used to determine the existence of disparate impacts exists might contain included-variable bias within the data itself. For example, (Knox, Lowe, and Mummolo, 2020)[https://www.cambridge.org/core/journals/american-political-science-review/article/administrative-records-mask-racially-biased-policing/66BC0F9998543868BB20F241796B79B8?utm_source=hootsuite&utm_medium=twitter&utm_term=&utm_content=FirstView&utm_campaign=PS] discusses how administrative records mask biases embedded into the dataset itself. Examining arrest records, they find that estimates of racial discrimination are understimates of the true effect since it is impossible to recover a necessary variable: citizens observed by race but not arrested. 
+
+In effect, this is an example of an included variable bias since the dataset contains a variable correlated with race that is implicitly controlled (that is, data on arrests is conditional on being observed). Accordingly, the approach of Jung et al., might be impossible to perform using critical datasets examined within disparate impact cases. Knox, Lowe, and Mummolo also propose an alternative way to detect a discriminatory difference by  bounding the effect using assumptions on  discriminatory intent or by using gold-standard data which does not contain racial biases and can identify an estimate for the missing "included-variable". In the instance of bounding effects, this procedure may lead to finding effect ranges which no longer meet the four-fifths standard.
+
+With this research in mind, this study will aim to construct synthetic datasets which contain properties matching datasets used in existing cases on disparate impact. Through the use of these synthetic datasets, we will examine how often current procedures are able to recover known disparate impacts and meet the rule standards, given increased sample sizes or modifications to model specifications addressing included-variable bias. Additionally, we will  explore the extent to which it is possible to apply potential solutions to included-variable bias, since this is essential bias to resolve given the purpose of disparate impact cases (e.g., scenario 3 above). We will also assess how the use of these tests may modify the ability to meet the two rule standards of disparate impact testing: the four-fifths rule and the statistical significance standard.
+
+```{r pvalue v. sample, echo = F}
+
+plot_colors <- c("#bdbdbd", "#737373", "#252525")
+
+# Demonstrate how p-value changes as a function of sample size
+ggplot(df, aes(x = n, y = pval, color = as.factor(scenario))) +
+  geom_hline(yintercept = 0.05, size = 1, linetype = 21, alpha = 0.7) +
+  geom_line(size = 1) +
+  scale_color_manual(values = plot_colors) +
+  labs(x = "\nSample size",
+       y = "P-value  ",
+       color = "Decision scenario",
+       title = "Figure 3: Simulated p-value for race coefficient, by scenario and sample size") +
+  theme_bw() +
+  scale_y_continuous(breaks = seq(0, 0.7, 0.1)) +
+  guides(color = guide_legend(nrow = 1, byrow = T, order = 1)) +
+      theme(legend.position = "bottom",
+            legend.direction = "vertical",
+            legend.box = "vertical",
+            legend.title.align = 0,
+            plot.title = element_text(hjust = 0),
+            axis.text = element_text(size = 10, family = 'serif'),
+            axis.title.y = element_text(angle = 0, vjust = 1),
+            legend.text = element_text(family = 'serif', size = 12))
+
 ```
