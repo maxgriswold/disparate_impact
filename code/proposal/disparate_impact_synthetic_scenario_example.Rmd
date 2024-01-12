@@ -1,17 +1,11 @@
 ---
-title: "Simulate disparate impact stats"
+title: "Demonstrate how disparate impact statistics can fail"
 author: "Max Griswold"
 date: "2024-01-11"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
-
-# Simulate how disparate impact statistics can fail
-
-# Max Griswold
-
-# 1/9/24
 
 ```{r knitr_options, include = F}
 rm(list = ls())
@@ -26,13 +20,16 @@ library(data.table)
 
 ```
 
+## Introduction
 Disparate impact cases require demonstrating if a disparity in outcomes for a protected class is statistically significant and sufficiently sized. This project aims to use simulation to show a range of cases where the conventional statistical rules for determining a disparate impact -the four-fifths rule and significance rule - can lead to different conclusions due
 
 This notebook demonstrates a simplified example of how we might conduct simulations. The setup concerns a landlord determining whether to accept a tenant's rental application, based on their income and former-incarceration status. In each of the three scenarios below, the landlord aims to deny tenancy to applicants based on their race.
 
+
+## Problem setup
 To start, I generate data according to the following data generating process (figure 1). I assume that an applicant's race is correlated both with their monthly earnings and with the probability of being formerly-incarcerated. I also assume monthly earnings also depend on former incarceration status. I assume in each scenario that these three variables uniquely determine if a landlord
 
-I determined the probability of former incarceration status using data from [DOJ-OJP](https://bjs.ojp.gov/content/pub/pdf/Llgsfp.pdf), monthly earnings based off [Census income](https://www.census.gov/library/publications/2023/demo/p60-279.html), and the effect of incarceration status on monthly earnings, stratified by race, from estimates in [Western, 2017](https://scholar.harvard.edu/files/brucewestern/files/racial_inequality_in_employment_and_earnings_after_incarceration.pdf).
+I determined the probability of former incarceration status using data from [DOJ-OJP](https://bjs.ojp.gov/content/pub/pdf/Llgsfp.pdf), monthly earnings based off (Census income)(https://www.census.gov/library/publications/2023/demo/p60-279.html), and the effect of incarceration status on monthly earnings, stratified by race, from estimates in [Western, 2017](https://scholar.harvard.edu/files/brucewestern/files/racial_inequality_in_employment_and_earnings_after_incarceration.pdf).
 
 ```{r, echo = F}
 # Creating a wrapper for plotting options, in case I reuse this:
@@ -201,6 +198,8 @@ df <- unique(df[, .(n, scenario, est, pval, rr)])
 
 ```
 
+## Results and discussion
+
 To meet the standards for disparate impact, the protected class needs to be selected as an applicant less than 80\% of the time (the four-fifths rule) and this effect needs to be significant at the 0.05 significance level. Since we set up the scenarios, we know for a fact that landlords are discriminating against black applicants 25% more often than white applicants. However, can the models detect this effect?
 
 Figure 2 displays the estimated rate at which black applicants are selected for a unit compared to white applicants. For scenario 1 and 2, the model is able to detect a disparity of roughly 70\%. For scenario 3, the estimated disparity is close to 100\%. While scenario 1 and 2 are able to meet the four-fifths rule, all scenarios underestimate the true disparity. This can be seen by examining the data generating process. Since the models include controls, the effects of race in these models will not estimate the mediating effect of race on earnings and former-incarceration status. Accordingly, all estimates are unable to detect the true disparity observed in the outcome. Increasing sample size does not improve the ability of the models to detect the true disparity.
@@ -240,15 +239,9 @@ Additionally, the estimating equations vary substantially in terms of detecting 
 
 However, in scenario 3, the model is unable to detect a significant effect at any sample size. This scenario is the canonical case where disparate impact tests would be most useful since the landlord's decision-making did not depend on race per se (i.e. no intent) but led to a disparate impact. This result should be unsurprising based on the data generating process above (since the model controls for both earnings and former incarceration status, there is no possibility for the race variable to generate an effect). 
 
-This result also aligns with existing scholarship which criticizes the use of examining the treatment effect of race as a measure of discrimination. (Kohler-Hausmann, 2019)[https://scholarlycommons.law.northwestern.edu/cgi/viewcontent.cgi?article=1374&context=nulr]; (Heckman, 1998)[https://www.aeaweb.org/articles?id=10.1257/jep.12.2.101]. Since the model controls for variables causally related to race, which is a routine practice done during disparate impact analyses, the model removes many of the factors causing discriminatory impacts due to race. Previous scholars have described this as the "included variable bias" ([Ayres, 2010](https://www.law.upenn.edu/live/files/1138-ayresincludedvariablebiaspdf); [Jung et al., 2023](https://5harad.com/papers/included-variable-bias.pdf)). In particular Jung et al., 2023 demonstrates that by weighting averages of differences across groups balanced by control covariates, it might be possible to identify the actual disparity. 
+This result also aligns with existing scholarship which criticizes the use of examining the treatment effect of race as a measure of discrimination. [Kohler-Hausmann, 2019](https://scholarlycommons.law.northwestern.edu/cgi/viewcontent.cgi?article=1374&context=nulr); [Heckman, 1998](https://www.aeaweb.org/articles?id=10.1257/jep.12.2.101). Since the model controls for variables causally related to race, which is a routine practice done during disparate impact analyses, the model removes many of the factors causing discriminatory impacts due to race. Previous scholars have described this as the "included variable bias" ([Ayres, 2010](https://www.law.upenn.edu/live/files/1138-ayresincludedvariablebiaspdf); [Jung et al., 2023](https://5harad.com/papers/included-variable-bias.pdf)). In particular Jung et al., 2023 demonstrates that by weighting averages of differences across groups balanced by control covariates, it might be possible to identify the actual disparity. 
 
-However, as Figure 2 shows, this could introduce a new problem: smaller sample sizes, making it less likely to meet the statistical significance rule. Since the Jung approach requires stratifying differences and creating a unitary measure of risk, a larger sample size would be needed to identify disparities. One potential solution to this suggested by previous work, is that courts should  use probabilities of detecting an effect in place of statistical significance (Miao and Gastwirth, 2013)[https://academic.oup.com/lpr/article/12/1/37/925237#15990473].. But this would require determining study power, which might not be possible to due a lack of reliable previous studies and the limiations of determinig statistical power after collecting data (Dziak, Dierker, and Abar, 2020)[https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7286546/]. 
 
-Less discussed by previous literature is the idea that data used to determine the existence of disparate impacts exists might contain included-variable bias within the data itself. For example, (Knox, Lowe, and Mummolo, 2020)[https://www.cambridge.org/core/journals/american-political-science-review/article/administrative-records-mask-racially-biased-policing/66BC0F9998543868BB20F241796B79B8?utm_source=hootsuite&utm_medium=twitter&utm_term=&utm_content=FirstView&utm_campaign=PS] discusses how administrative records mask biases embedded into the dataset itself. Examining arrest records, they find that estimates of racial discrimination are understimates of the true effect since it is impossible to recover a necessary variable: citizens observed by race but not arrested. 
-
-In effect, this is an example of an included variable bias since the dataset contains a variable correlated with race that is implicitly controlled (that is, data on arrests is conditional on being observed). Accordingly, the approach of Jung et al., might be impossible to perform using critical datasets examined within disparate impact cases. Knox, Lowe, and Mummolo also propose an alternative way to detect a discriminatory difference by  bounding the effect using assumptions on  discriminatory intent or by using gold-standard data which does not contain racial biases and can identify an estimate for the missing "included-variable". In the instance of bounding effects, this procedure may lead to finding effect ranges which no longer meet the four-fifths standard.
-
-With this research in mind, this study will aim to construct synthetic datasets which contain properties matching datasets used in existing cases on disparate impact. Through the use of these synthetic datasets, we will examine how often current procedures are able to recover known disparate impacts and meet the rule standards, given increased sample sizes or modifications to model specifications addressing included-variable bias. Additionally, we will  explore the extent to which it is possible to apply potential solutions to included-variable bias, since this is essential bias to resolve given the purpose of disparate impact cases (e.g., scenario 3 above). We will also assess how the use of these tests may modify the ability to meet the two rule standards of disparate impact testing: the four-fifths rule and the statistical significance standard.
 
 ```{r pvalue v. sample, echo = F}
 
@@ -276,3 +269,11 @@ ggplot(df, aes(x = n, y = pval, color = as.factor(scenario))) +
             legend.text = element_text(family = 'serif', size = 12))
 
 ```
+
+However, as Figure 2 shows, this could introduce a new problem: smaller sample sizes, making it less likely to meet the statistical significance rule. Since the Jung approach requires stratifying differences and creating a unitary measure of risk, a larger sample size would be needed to identify disparities. One potential solution to this suggested by previous work, is that courts should  use probabilities of detecting an effect in place of statistical significance [Miao and Gastwirth, 2013](https://academic.oup.com/lpr/article/12/1/37/925237#15990473). But this would require determining study power, which might not be possible due to a lack of reliable previous estimates and the limitations of determining statistical power after collecting data [Dziak, Dierker, and Abar, 2020](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7286546/). 
+
+Less discussed by previous literature is the idea that data used to determine the existence of disparate impacts might contain included-variable bias within the data itself. For example, [Knox, Lowe, and Mummolo, 2020](https://www.cambridge.org/core/journals/american-political-science-review/article/administrative-records-mask-racially-biased-policing/66BC0F9998543868BB20F241796B79B8?utm_source=hootsuite&utm_medium=twitter&utm_term=&utm_content=FirstView&utm_campaign=PS) discusses how administrative records mask biases embedded into a dataset. Examining arrest records, they find that estimates of racial discrimination are underestimates of the true effect since it is impossible to recover a necessary variable: citizens observed by race but not arrested. 
+
+In effect, this is an example of an included variable bias since the dataset contains a variable correlated with race that is implicitly controlled (that is, data on arrests is conditional on being observed). Accordingly, the approach of Jung et al., might be impossible to perform using critical datasets examined within disparate impact cases. Knox, Lowe, and Mummolo also propose an alternative way to detect a discriminatory difference by  bounding the effect using assumptions on  discriminatory intent or by using gold-standard data which does not contain racial biases and can identify an estimate for the missing "included-variable". In the instance of bounding effects, this procedure may lead to finding effect ranges which no longer meet the four-fifths standard.
+
+With this research in mind, this study will aim to construct synthetic datasets which contain properties matching datasets used in existing cases on disparate impact. Through the use of these synthetic datasets, we will examine how often current procedures are able to recover known disparate impacts and meet the rule standards, given increased sample sizes or modifications to model specifications addressing included-variable bias. Additionally, we will  explore the extent to which it is possible to apply potential solutions to included-variable bias, since this is essential bias to resolve given the purpose of disparate impact cases (e.g., scenario 3 above). We will also assess how the use of these tests may modify the ability to meet the two rule standards of disparate impact testing: the four-fifths rule and the statistical significance standard.
