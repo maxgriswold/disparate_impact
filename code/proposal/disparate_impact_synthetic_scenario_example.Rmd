@@ -29,7 +29,7 @@ This notebook demonstrates a simplified example of how we might conduct simulati
 ## Problem setup
 To start, I generate data according to the following data generating process (figure 1). I assume that an applicant's race is correlated both with their monthly earnings and with the probability of being formerly-incarcerated. I also assume monthly earnings also depend on former incarceration status. I assume in each scenario that these three variables uniquely determine if a landlord
 
-I determined the probability of former incarceration status using data from [DOJ-OJP](https://bjs.ojp.gov/content/pub/pdf/Llgsfp.pdf), monthly earnings based off (Census income)(https://www.census.gov/library/publications/2023/demo/p60-279.html), and the effect of incarceration status on monthly earnings, stratified by race, from estimates in [Western, 2017](https://scholar.harvard.edu/files/brucewestern/files/racial_inequality_in_employment_and_earnings_after_incarceration.pdf).
+I determined the probability of former incarceration status using data from [DOJ-OJP](https://bjs.ojp.gov/content/pub/pdf/Llgsfp.pdf), monthly earnings based off [census income](https://www.census.gov/library/publications/2023/demo/p60-279.html), and the effect of incarceration status on monthly earnings, stratified by race, from estimates in [Western, 2017](https://scholar.harvard.edu/files/brucewestern/files/racial_inequality_in_employment_and_earnings_after_incarceration.pdf).
 
 ```{r, echo = F}
 # Creating a wrapper for plotting options, in case I reuse this:
@@ -122,9 +122,8 @@ sim_scenarios <- function(n, iter, sum_res = T){
   dp2 <- (1 - 0.75*bad_luck)*dp_income*dp_jail
   d2  <- rbinom(n, 1, dp2)
   
-  # rejections so that a similar number of black applicants are denied
-  # housing as scenario 1 and 2.
-  dp_jail_alt <- 1 - 0.95*jail  
+  # Scenario 3: Almost always reject formerly-incarcerated individuals.
+  dp_jail_alt <- 1 - 0.99*jail  
   dp3 <- dp_income*dp_jail_alt
   d3  <- rbinom(n, 1, dp3)
   
@@ -171,7 +170,10 @@ sim_scenarios <- function(n, iter, sum_res = T){
   
   # Summarize results and return a reduced dataset
   if (sum_res == T){
-    df_sim <- unique(df_sim[, .(iter, n, est1, est2, est3, pval1, pval2, pval3, rr1, rr2, rr3)])
+    df_sim <- unique(df_sim[, .(iter, n, est1, est2, est3,
+                                pval1, pval2, pval3, 
+                                rr1, rr2, rr3)])
+    
     df_sim <- melt(df_sim, id.vars = c("iter", "n"), measure = patterns("^est", "^pval", "^rr"),
                 value.name = c("est", "pval", "rr"), variable.name = "scenario")
   }
@@ -196,6 +198,8 @@ df <- rbindlist(mapply(sim_scenarios, n = args$n, i = args$i, SIMPLIFY = F, USE.
 df[, `:=`(est = mean(est), pval = mean(pval), rr = mean(rr)), by = c("scenario", "n")]
 df <- unique(df[, .(n, scenario, est, pval, rr)])
 
+df[, scenario := ifelse(scenario == 1, "Direct discrimination", ifelse(scenario == 2, "Higher variance", "Disparate impact"))]
+df[, scenario := factor(scenario, levels = c("Direct discrimination", "Higher variance", "Disparate impact"))]
 ```
 
 ## Results and discussion
@@ -210,14 +214,14 @@ plot_colors <- c("#bdbdbd", "#737373", "#252525")
 # Demonstrate the estimated effect by scenario
 ggplot(df, aes(x = n, y = est, color = as.factor(scenario))) +
   geom_line(size = 1) +
-  geom_line(data = df[, mean(rr), by = "n"], aes(x = n, y = V1), color = "#252525", alpha = 0.8, linetype = 21, size = 1) +
+  geom_line(data = df[, mean(rr, na.rm = T), by = "n"], aes(x = n, y = V1), color = "#252525", alpha = 0.8, linetype = 21, size = 1) +
   scale_color_manual(values = plot_colors) +
   labs(x = "\nSample size",
-       y = "True \ndisparity ",
+       y = "Estimated \ndisparity ",
        color = "Decision scenario",
-       title = "Figure 2: Estimated ratio of applicant selection") +
+       title = "Figure 2: Estimated disparity ratio in applicant selection") +
   theme_bw() +
-  annotate('text', x = 500, y = 0.5, label = "Observed \ndisparity", size = 3) +
+  annotate('text', x = 500, y = 0.5, label = "True \ndisparity", size = 3) +
   annotate('segment', x = 730, y = 0.53, xend = 1100, yend = 0.6, 
            arrow = arrow(type = 'closed', length = unit(0.02, 'npc'))) +
   scale_y_continuous(limits = c(0, 1.1), 
@@ -255,7 +259,7 @@ ggplot(df, aes(x = n, y = pval, color = as.factor(scenario))) +
   labs(x = "\nSample size",
        y = "P-value  ",
        color = "Decision scenario",
-       title = "Figure 3: Simulated p-value for race coefficient, by scenario and sample size") +
+       title = "Figure 3: Estimated p-value for race coefficient, by scenario and sample size") +
   theme_bw() +
   scale_y_continuous(breaks = seq(0, 0.7, 0.1)) +
   guides(color = guide_legend(nrow = 1, byrow = T, order = 1)) +
